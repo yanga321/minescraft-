@@ -1,0 +1,301 @@
+{
+  "name": "Minecraft Horror - Daily Content Generation",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 2 * * *"
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Daily 2 AM Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [200, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.APP_URL }}/api/patterns",
+        "method": "GET",
+        "authentication": "none",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "fetch-patterns",
+      "name": "Fetch Viral Patterns",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [420, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const patterns = $input.first().json;\n\nconst topPatterns = (patterns.data || patterns)\n  .sort((a, b) => b.performance_score - a.performance_score)\n  .slice(0, 3);\n\nconst systemPrompt = `You generate Minecraft horror content concepts inspired by viral patterns.\n\nBRAND RULES:\n- Cryptic, mysterious tone - never over-explain\n- Forbidden words: scary, creepy, jumpscare, horror, terrifying, spooky\n- Analog horror aesthetic with VHS grain\n- POV: or Day X: caption format, max 100 characters\n\nEach concept must include:\n- concept: Brief description\n- veo_prompt: Detailed video generation prompt (60+ words with POV/camera, Minecraft version, lighting, color grading, camera movement, effects, quality)\n- caption: Cryptic caption under 100 chars\n- scene_description: Detailed scene description\n- scene_type: One of \"liminal\", \"entity\", \"glitch\", \"build\"\n\nReturn a JSON object with a \"concepts\" array of 2 concepts.`;\n\nconst userPrompt = `Generate 2 concepts inspired by these top-performing patterns:\\n${JSON.stringify(topPatterns, null, 2)}`;\n\nreturn [{ json: { systemPrompt, userPrompt, topPatterns } }];"
+      },
+      "id": "prepare-prompt",
+      "name": "Prepare GPT Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [640, 300]
+    },
+    {
+      "parameters": {
+        "resource": "chat",
+        "operation": "message",
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            {
+              "content": "={{ $json.systemPrompt }}",
+              "role": "system"
+            },
+            {
+              "content": "={{ $json.userPrompt }}",
+              "role": "user"
+            }
+          ]
+        },
+        "options": {
+          "temperature": 0.8,
+          "responseFormat": "json_object"
+        }
+      },
+      "id": "openai-generate",
+      "name": "Generate Concepts (GPT-4o)",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.4,
+      "position": [860, 300],
+      "credentials": {
+        "openAiApi": {
+          "id": "openai-credentials",
+          "name": "OpenAI API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $input.first().json;\n\nlet concepts;\ntry {\n  const parsed = typeof response.message === 'string'\n    ? JSON.parse(response.message.content || response.message)\n    : response.message;\n  concepts = parsed.concepts || parsed;\n} catch (e) {\n  concepts = [];\n}\n\nconst items = concepts.map(c => ({\n  json: {\n    concept: c.concept,\n    veo_prompt: c.veo_prompt,\n    caption: c.caption,\n    scene_description: c.scene_description,\n    scene_type: c.scene_type\n  }\n}));\n\nreturn items.length > 0 ? items : [{ json: { error: 'No concepts generated' } }];"
+      },
+      "id": "parse-concepts",
+      "name": "Parse Generated Concepts",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1080, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.APP_URL }}/api/validate",
+        "method": "POST",
+        "authentication": "none",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "concept",
+              "value": "={{ $json.concept }}"
+            },
+            {
+              "name": "caption",
+              "value": "={{ $json.caption }}"
+            },
+            {
+              "name": "scene_description",
+              "value": "={{ $json.scene_description }}"
+            },
+            {
+              "name": "veo_prompt",
+              "value": "={{ $json.veo_prompt }}"
+            },
+            {
+              "name": "scene_type",
+              "value": "={{ $json.scene_type }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "validate-content",
+      "name": "Validate & Score Content",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1300, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.approved }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "check-approved",
+      "name": "Is Approved?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1520, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\nconsole.log(`Content approved: \"${item.caption}\"`);\nconsole.log(`Scores - Brand: ${item.brand_score}, Viral: ${item.viral_score}, Prompt: ${item.prompt_score}`);\nreturn [$input.first()];"
+      },
+      "id": "log-approved",
+      "name": "Log Approved",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1740, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\nconsole.log(`Content rejected: \"${item.caption}\"`);\nconsole.log(`Scores - Brand: ${item.brand_score}, Viral: ${item.viral_score}`);\nreturn [$input.first()];"
+      },
+      "id": "log-rejected",
+      "name": "Log Rejected",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1740, 420]
+    },
+    {
+      "parameters": {},
+      "id": "end-node",
+      "name": "Done",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [1960, 300]
+    }
+  ],
+  "connections": {
+    "Daily 2 AM Trigger": {
+      "main": [
+        [
+          {
+            "node": "Fetch Viral Patterns",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Viral Patterns": {
+      "main": [
+        [
+          {
+            "node": "Prepare GPT Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare GPT Prompt": {
+      "main": [
+        [
+          {
+            "node": "Generate Concepts (GPT-4o)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Concepts (GPT-4o)": {
+      "main": [
+        [
+          {
+            "node": "Parse Generated Concepts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Generated Concepts": {
+      "main": [
+        [
+          {
+            "node": "Validate & Score Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate & Score Content": {
+      "main": [
+        [
+          {
+            "node": "Is Approved?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Approved?": {
+      "main": [
+        [
+          {
+            "node": "Log Approved",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Rejected",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Approved": {
+      "main": [
+        [
+          {
+            "node": "Done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Rejected": {
+      "main": [
+        [
+          {
+            "node": "Done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [
+    {
+      "name": "minecraft-horror"
+    }
+  ]
+}

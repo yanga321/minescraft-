@@ -1,0 +1,296 @@
+{
+  "name": "Minecraft Horror - Analytics Collection",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 23 * * *"
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Daily 11 PM Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [200, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT pc.*, cq.caption, cq.scene_type, cq.viral_score FROM published_content pc JOIN content_queue cq ON pc.content_queue_id = cq.id WHERE pc.posted_date >= NOW() - INTERVAL '30 days' ORDER BY pc.posted_date DESC"
+      },
+      "id": "fetch-published",
+      "name": "Query Recent Published Content",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [420, 300],
+      "credentials": {
+        "supabaseApi": {
+          "id": "supabase-credentials",
+          "name": "Supabase API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.platform }}",
+              "value2": "tiktok"
+            }
+          ]
+        }
+      },
+      "id": "platform-branch",
+      "name": "Platform Branch",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [640, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://open.tiktokapis.com/v2/video/query/",
+        "method": "POST",
+        "authentication": "predefinedCredentialType",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"filters\": {\n    \"video_ids\": [\"{{ $json.post_url }}\"]\n  },\n  \"fields\": [\"id\", \"like_count\", \"comment_count\", \"share_count\", \"view_count\"]\n}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "fetch-tiktok-stats",
+      "name": "Fetch TikTok Stats",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [860, 200],
+      "notes": "Requires TikTok Content Publishing API credentials."
+    },
+    {
+      "parameters": {
+        "url": "=https://www.googleapis.com/youtube/v3/videos?part=statistics&id={{ $json.post_url }}",
+        "method": "GET",
+        "authentication": "predefinedCredentialType",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "fetch-youtube-stats",
+      "name": "Fetch YouTube Stats",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [860, 420],
+      "notes": "Requires YouTube Data API v3 key or OAuth credentials."
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\nconst stats = input.data?.videos?.[0] || input.statistics || input;\n\nconst views = stats.view_count || stats.viewCount || 0;\nconst likes = stats.like_count || stats.likeCount || 0;\nconst shares = stats.share_count || stats.shareCount || 0;\nconst comments = stats.comment_count || stats.commentCount || 0;\n\nconst engagementRate = views > 0\n  ? ((likes + comments + shares) / views * 100).toFixed(2)\n  : 0;\n\nreturn [{\n  json: {\n    id: input.id,\n    views: parseInt(views),\n    likes: parseInt(likes),\n    shares: parseInt(shares),\n    comments: parseInt(comments),\n    engagement_rate: parseFloat(engagementRate)\n  }\n}];"
+      },
+      "id": "normalize-tiktok",
+      "name": "Normalize TikTok Stats",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1080, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\nconst stats = input.items?.[0]?.statistics || input.statistics || input;\n\nconst views = stats.viewCount || 0;\nconst likes = stats.likeCount || 0;\nconst comments = stats.commentCount || 0;\nconst shares = 0;\n\nconst engagementRate = views > 0\n  ? ((parseInt(likes) + parseInt(comments)) / parseInt(views) * 100).toFixed(2)\n  : 0;\n\nreturn [{\n  json: {\n    id: input.id,\n    views: parseInt(views),\n    likes: parseInt(likes),\n    shares: shares,\n    comments: parseInt(comments),\n    engagement_rate: parseFloat(engagementRate)\n  }\n}];"
+      },
+      "id": "normalize-youtube",
+      "name": "Normalize YouTube Stats",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1080, 420]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=UPDATE published_content SET views = {{ $json.views }}, likes = {{ $json.likes }}, shares = {{ $json.shares }}, comments = {{ $json.comments }}, engagement_rate = {{ $json.engagement_rate }}, last_updated = NOW() WHERE id = '{{ $json.id }}'"
+      },
+      "id": "update-analytics",
+      "name": "Update Analytics in DB",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [1300, 300],
+      "credentials": {
+        "supabaseApi": {
+          "id": "supabase-credentials",
+          "name": "Supabase API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $json.views }}",
+              "operation": "larger",
+              "value2": 100000
+            }
+          ]
+        }
+      },
+      "id": "viral-check",
+      "name": "Viral Threshold Check (100K views)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1520, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const stats = $input.first().json;\nconsole.log(`VIRAL ALERT: Content ${stats.id} hit ${stats.views} views!`);\nconsole.log(`Engagement: ${stats.engagement_rate}% | Likes: ${stats.likes} | Shares: ${stats.shares}`);\nreturn [$input.first()];"
+      },
+      "id": "viral-alert",
+      "name": "Log Viral Alert",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1740, 200]
+    },
+    {
+      "parameters": {},
+      "id": "below-threshold",
+      "name": "Below Threshold",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [1740, 420]
+    }
+  ],
+  "connections": {
+    "Daily 11 PM Trigger": {
+      "main": [
+        [
+          {
+            "node": "Query Recent Published Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Query Recent Published Content": {
+      "main": [
+        [
+          {
+            "node": "Platform Branch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Platform Branch": {
+      "main": [
+        [
+          {
+            "node": "Fetch TikTok Stats",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fetch YouTube Stats",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch TikTok Stats": {
+      "main": [
+        [
+          {
+            "node": "Normalize TikTok Stats",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch YouTube Stats": {
+      "main": [
+        [
+          {
+            "node": "Normalize YouTube Stats",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize TikTok Stats": {
+      "main": [
+        [
+          {
+            "node": "Update Analytics in DB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize YouTube Stats": {
+      "main": [
+        [
+          {
+            "node": "Update Analytics in DB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Analytics in DB": {
+      "main": [
+        [
+          {
+            "node": "Viral Threshold Check (100K views)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Viral Threshold Check (100K views)": {
+      "main": [
+        [
+          {
+            "node": "Log Viral Alert",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Below Threshold",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [
+    {
+      "name": "minecraft-horror"
+    }
+  ]
+}

@@ -1,0 +1,287 @@
+{
+  "name": "Minecraft Horror - Weekly Revenue Report",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 9 * * 1"
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Monday 9 AM Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [200, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const now = new Date();\nconst weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);\n\nreturn [{\n  json: {\n    week_start: weekAgo.toISOString().split('T')[0],\n    week_end: now.toISOString().split('T')[0],\n    sources: ['tiktok_fund', 'youtube_adsense', 'product_sales', 'affiliate']\n  }\n}];"
+      },
+      "id": "prepare-date-range",
+      "name": "Prepare Date Range",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [420, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://open.tiktokapis.com/v2/creator/earnings/",
+        "method": "GET",
+        "authentication": "predefinedCredentialType",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "fetch-tiktok-revenue",
+      "name": "Fetch TikTok Creator Fund",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [640, 100],
+      "notes": "Placeholder - replace with actual TikTok Creator Fund API endpoint and auth."
+    },
+    {
+      "parameters": {
+        "url": "https://youtubeanalytics.googleapis.com/v2/reports?ids=channel==MINE&startDate={{ $json.week_start }}&endDate={{ $json.week_end }}&metrics=estimatedRevenue&dimensions=day",
+        "method": "GET",
+        "authentication": "predefinedCredentialType",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "fetch-youtube-revenue",
+      "name": "Fetch YouTube AdSense Revenue",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [640, 300],
+      "notes": "Requires YouTube Analytics API OAuth credentials."
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.APP_URL }}/api/revenue/external",
+        "method": "GET",
+        "authentication": "none",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "fetch-other-revenue",
+      "name": "Fetch Product & Affiliate Revenue",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [640, 500]
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst records = [];\nconst now = new Date().toISOString().split('T')[0];\n\nfor (const item of items) {\n  const data = item.json;\n\n  // TikTok Creator Fund\n  if (data.earnings || data.tiktok_earnings) {\n    records.push({\n      source: 'tiktok_fund',\n      amount: parseFloat(data.earnings || data.tiktok_earnings || 0),\n      date: now\n    });\n  }\n\n  // YouTube AdSense\n  if (data.rows || data.estimatedRevenue || data.youtube_revenue) {\n    const ytRevenue = data.rows\n      ? data.rows.reduce((sum, row) => sum + (row[1] || 0), 0)\n      : parseFloat(data.estimatedRevenue || data.youtube_revenue || 0);\n    records.push({\n      source: 'youtube_adsense',\n      amount: ytRevenue,\n      date: now\n    });\n  }\n\n  // Product Sales\n  if (data.product_sales !== undefined) {\n    records.push({\n      source: 'product_sales',\n      amount: parseFloat(data.product_sales || 0),\n      date: now\n    });\n  }\n\n  // Affiliate\n  if (data.affiliate !== undefined) {\n    records.push({\n      source: 'affiliate',\n      amount: parseFloat(data.affiliate || 0),\n      date: now\n    });\n  }\n}\n\n// If no records parsed, insert zero-value placeholders\nif (records.length === 0) {\n  records.push(\n    { source: 'tiktok_fund', amount: 0, date: now },\n    { source: 'youtube_adsense', amount: 0, date: now },\n    { source: 'product_sales', amount: 0, date: now },\n    { source: 'affiliate', amount: 0, date: now }\n  );\n}\n\nreturn records.map(r => ({ json: r }));"
+      },
+      "id": "consolidate-revenue",
+      "name": "Consolidate Revenue Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [920, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=INSERT INTO revenue_sources (source, amount, date) VALUES ('{{ $json.source }}', {{ $json.amount }}, '{{ $json.date }}')"
+      },
+      "id": "insert-revenue",
+      "name": "Insert Revenue Records",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [1140, 300],
+      "credentials": {
+        "supabaseApi": {
+          "id": "supabase-credentials",
+          "name": "Supabase API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT source, SUM(amount) as total, COUNT(*) as entries FROM revenue_sources WHERE date >= NOW() - INTERVAL '7 days' GROUP BY source ORDER BY total DESC"
+      },
+      "id": "weekly-summary",
+      "name": "Generate Weekly Summary",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [1360, 300],
+      "credentials": {
+        "supabaseApi": {
+          "id": "supabase-credentials",
+          "name": "Supabase API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = $input.all().map(i => i.json);\n\nlet totalRevenue = 0;\nconst lines = ['=== WEEKLY REVENUE REPORT ===', ''];\n\nfor (const row of rows) {\n  const amount = parseFloat(row.total || 0);\n  totalRevenue += amount;\n  lines.push(`${row.source}: $${amount.toFixed(2)} (${row.entries} entries)`);\n}\n\nlines.push('');\nlines.push(`TOTAL: $${totalRevenue.toFixed(2)}`);\nlines.push('');\nlines.push(`Report generated: ${new Date().toISOString()}`);\n\nconst report = lines.join('\\n');\nconsole.log(report);\n\nreturn [{ json: { report, totalRevenue, breakdown: rows } }];"
+      },
+      "id": "format-report",
+      "name": "Format Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1580, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.APP_URL }}/api/reports/weekly",
+        "method": "POST",
+        "authentication": "none",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "send-report",
+      "name": "Send Report to App",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1800, 300]
+    }
+  ],
+  "connections": {
+    "Monday 9 AM Trigger": {
+      "main": [
+        [
+          {
+            "node": "Prepare Date Range",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Date Range": {
+      "main": [
+        [
+          {
+            "node": "Fetch TikTok Creator Fund",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch YouTube AdSense Revenue",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch Product & Affiliate Revenue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch TikTok Creator Fund": {
+      "main": [
+        [
+          {
+            "node": "Consolidate Revenue Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch YouTube AdSense Revenue": {
+      "main": [
+        [
+          {
+            "node": "Consolidate Revenue Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Product & Affiliate Revenue": {
+      "main": [
+        [
+          {
+            "node": "Consolidate Revenue Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Consolidate Revenue Data": {
+      "main": [
+        [
+          {
+            "node": "Insert Revenue Records",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Revenue Records": {
+      "main": [
+        [
+          {
+            "node": "Generate Weekly Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Weekly Summary": {
+      "main": [
+        [
+          {
+            "node": "Format Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Report": {
+      "main": [
+        [
+          {
+            "node": "Send Report to App",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [
+    {
+      "name": "minecraft-horror"
+    }
+  ]
+}

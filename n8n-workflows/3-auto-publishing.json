@@ -1,0 +1,306 @@
+{
+  "name": "Minecraft Horror - Auto Publishing",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 6,18 * * *"
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "6 AM & 6 PM Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [200, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM content_queue WHERE status = 'generated' AND veo_video_url IS NOT NULL ORDER BY viral_score DESC LIMIT 1"
+      },
+      "id": "fetch-generated",
+      "name": "Query Generated Content",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [420, 300],
+      "credentials": {
+        "supabaseApi": {
+          "id": "supabase-credentials",
+          "name": "Supabase API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $json.length || 0 }}",
+              "operation": "larger",
+              "value2": 0
+            }
+          ]
+        }
+      },
+      "id": "has-content",
+      "name": "Has Content?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [640, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const content = $input.first().json;\n\nreturn [\n  {\n    json: {\n      ...content,\n      platform: 'tiktok'\n    }\n  },\n  {\n    json: {\n      ...content,\n      platform: 'youtube'\n    }\n  }\n];"
+      },
+      "id": "split-platforms",
+      "name": "Branch for Platforms",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [860, 200]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.platform }}",
+              "value2": "tiktok"
+            }
+          ]
+        }
+      },
+      "id": "platform-switch",
+      "name": "Which Platform?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1080, 200]
+    },
+    {
+      "parameters": {
+        "url": "https://open.tiktokapis.com/v2/post/publish/video/init/",
+        "method": "POST",
+        "authentication": "predefinedCredentialType",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"post_info\": {\n    \"title\": \"{{ $json.caption }}\",\n    \"privacy_level\": \"PUBLIC_TO_EVERYONE\",\n    \"disable_duet\": false,\n    \"disable_comment\": false,\n    \"disable_stitch\": false\n  },\n  \"source_info\": {\n    \"source\": \"PULL_FROM_URL\",\n    \"video_url\": \"{{ $json.veo_video_url }}\"\n  }\n}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "post-tiktok",
+      "name": "Post to TikTok",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1300, 100],
+      "notes": "Requires TikTok Content Publishing API credentials. Replace with actual endpoint and auth."
+    },
+    {
+      "parameters": {
+        "url": "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status",
+        "method": "POST",
+        "authentication": "predefinedCredentialType",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"snippet\": {\n    \"title\": \"{{ $json.caption }}\",\n    \"description\": \"#minecraft #minecrafthorror #analog\",\n    \"tags\": [\"minecraft\", \"horror\", \"analog horror\", \"shorts\"],\n    \"categoryId\": \"20\"\n  },\n  \"status\": {\n    \"privacyStatus\": \"public\",\n    \"selfDeclaredMadeForKids\": false,\n    \"embeddable\": true\n  }\n}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "post-youtube",
+      "name": "Post to YouTube Shorts",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1300, 320],
+      "notes": "Requires YouTube Data API v3 OAuth credentials. Video upload requires a resumable upload flow."
+    },
+    {
+      "parameters": {
+        "jsCode": "const content = $input.first().json;\nconst platform = content.platform;\nconst postUrl = content.publish_id || content.id || 'pending';\n\nreturn [{\n  json: {\n    content_queue_id: content.id,\n    platform: platform,\n    post_url: postUrl,\n    views: 0,\n    likes: 0,\n    shares: 0,\n    comments: 0,\n    posted_date: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "prepare-published-record",
+      "name": "Prepare Published Record",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1520, 200]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=INSERT INTO published_content (content_queue_id, platform, post_url, views, likes, shares, comments, posted_date) VALUES ('{{ $json.content_queue_id }}', '{{ $json.platform }}', '{{ $json.post_url }}', 0, 0, 0, 0, '{{ $json.posted_date }}')"
+      },
+      "id": "insert-published",
+      "name": "Insert Published Record",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [1740, 200],
+      "credentials": {
+        "supabaseApi": {
+          "id": "supabase-credentials",
+          "name": "Supabase API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=UPDATE content_queue SET status = 'posted', updated_at = NOW() WHERE id = '{{ $json.content_queue_id }}'"
+      },
+      "id": "update-status-posted",
+      "name": "Update Status to Posted",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [1960, 200],
+      "credentials": {
+        "supabaseApi": {
+          "id": "supabase-credentials",
+          "name": "Supabase API"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "id": "no-content",
+      "name": "No Content Available",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [860, 420]
+    }
+  ],
+  "connections": {
+    "6 AM & 6 PM Trigger": {
+      "main": [
+        [
+          {
+            "node": "Query Generated Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Query Generated Content": {
+      "main": [
+        [
+          {
+            "node": "Has Content?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Content?": {
+      "main": [
+        [
+          {
+            "node": "Branch for Platforms",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No Content Available",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Branch for Platforms": {
+      "main": [
+        [
+          {
+            "node": "Which Platform?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Which Platform?": {
+      "main": [
+        [
+          {
+            "node": "Post to TikTok",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Post to YouTube Shorts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Post to TikTok": {
+      "main": [
+        [
+          {
+            "node": "Prepare Published Record",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Post to YouTube Shorts": {
+      "main": [
+        [
+          {
+            "node": "Prepare Published Record",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Published Record": {
+      "main": [
+        [
+          {
+            "node": "Insert Published Record",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Published Record": {
+      "main": [
+        [
+          {
+            "node": "Update Status to Posted",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [
+    {
+      "name": "minecraft-horror"
+    }
+  ]
+}
